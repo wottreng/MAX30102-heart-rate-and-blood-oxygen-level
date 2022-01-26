@@ -141,7 +141,7 @@ void loop()
   float temperature_F = (temperature_C * 1.8) + 32; // convert to F
   //
 
-  Serial.println("----");
+  Serial.println("------");
   Serial.print(elapsedTime);
   Serial.print("\t");
   Serial.print(n_spo2);

@@ -98,6 +98,7 @@ void rf_heart_rate_and_oxygen_saturation(uint32_t* pun_ir_buffer, int32_t n_ir_b
         // spO2 calc from RF
         *pn_spo2 = (-45.060 * xy_ratio + 30.354) * xy_ratio + 94.845;
         *pch_spo2_valid = 1;
+    }else{
         // spO2 calc from SparkFun
         *pn_spo2 = (-45.060 * xy_ratio * xy_ratio / 10000) + (30.354 * xy_ratio / 100) + 94.845; // float_SPO2 =  -45.060*n_ratio_average* n_ratio_average/10000 + 30.354 *n_ratio_average/100 + 94.845 ;
         *pch_spo2_valid = 0;

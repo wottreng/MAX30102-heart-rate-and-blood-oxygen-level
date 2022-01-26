@@ -152,9 +152,9 @@ bool maxim_max30102_init() // ------------------------- INIT -------------------
         return false;
     if (!maxim_max30102_write_reg(REG_SPO2_CONFIG, 0b0'01'001'11)) // SPO2_ADC range = 4096, SPO2 sample rate (100 Hz), LED pulseWidth (411uS)
         return false;
-    if (!maxim_max30102_write_reg(REG_LED1_PULSE_AMPLITUDE, 30)) // led pulse amplitude 36 => 7mA
+    if (!maxim_max30102_write_reg(REG_LED1_PULSE_AMPLITUDE, 60)) // led pulse amplitude 36 => 7mA
         return false;
-    if (!maxim_max30102_write_reg(REG_LED2_PULSE_AMPLITUDE, 30)) // led2 amplitude
+    if (!maxim_max30102_write_reg(REG_LED2_PULSE_AMPLITUDE, 60)) // led2 amplitude
         return false;
     /*
     if (!maxim_max30102_write_reg(0x11, 0b0'010'0'001)) // multimode led control, red then ir

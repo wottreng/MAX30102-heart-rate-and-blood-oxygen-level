@@ -3,9 +3,10 @@ MAX30102 sensor integration with ESP8266 for wifi/bluetooth capabilities
 
 ## Current Status:
 * getting consistent heart beat and blood oxygen levels
+* wifi working
 
 ## Next Steps:
-* integrate wifi and bluetooth into source code
+* refinement of libraries and algorithms 
 
 Optical Heart Rate Detection and Blood Oxygen Levels \
 By: Mark Wottreng \

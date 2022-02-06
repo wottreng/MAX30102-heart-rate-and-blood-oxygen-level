@@ -1,5 +1,5 @@
 /*
-  Optical Heart Rate Detection and Blood Oxygen Levels
+Optical Heart Rate Detection and Blood Oxygen Levels with wifi integration
   By: Mark Wottreng
   Date: 24 January 2022
 
@@ -7,6 +7,7 @@
   https://github.com/sparkfun/MAX30105_Breakout
   https://github.com/aromring/MAX30102_by_RF
   https://github.com/Protocentral/Pulse_MAX30102
+  https://www.forward.com.au/pfod/ESP8266/GPIOpins/ESP8266_01_pin_magic.html
 
 
   This is a demo to show the reading of heart rate and blood oxygen level
@@ -20,141 +21,120 @@
   Hardware Connections (Breakoutboard to ESP8266 NodeMCU):
   -3.3V power
   -GND
-  -SDA = D1
-  -SCL = D2
-  -INT = D6
+  -SDA => D1
+  -SCL => D2
 
-  * NOTE: if reading are not consistent, some calibration may be required
-          see maxim_max30102_init() in /lib/max30102/max30102.cpp
+  Hardware Connections for MAX30102 to ESP8266-01 (1MB)
+  -SDA => GPIO 0 or GPIO 1(TX)
+  -SCL => GPIO 2 or GPIO 3(RX)
+
+  LIMITATIONS:
+    * GPIO 0 goes LOW on start up
+    * GPIO 0 and 2 need to be HIGH to boot
+
+  PINS:
+    *GPIO: TX (pin 1), RX (pin 3), pin 0, pin 2
+    *power: CH_PD,VCC = HIGH, GDN = LOW
+    *LED_BUILTIN 1
+
+  * NOTE: if reading are not consistent, some calibration may be required see max30102.h
+
 */
 
-//#include <Wire.h>
-#define SDA_PIN 5 //D1
-#define SCL_PIN 4 //D2
-#define int_pin 12 //D6
-
-#include <max30102.h>
-#include <SPI.h>
-#include <algorithmRF.h>
-
-long samplesTaken = 0; //Counter for calculating the Hz or read rate
+#include <Arduino.h>
+#include <MAX30102_PulseOximeter.h>
 //
-uint32_t elapsedTime,timeStart;
-
-uint32_t aun_ir_buffer[BUFFER_SIZE]; //infrared LED sensor data
-uint32_t aun_red_buffer[BUFFER_SIZE];  //red LED sensor data
-float old_n_spo2;  // Previous SPO2 value
-uint8_t uch_dummy,k;
+#include <myEEPROM.h>
+#include <myWifi.h>
+#include <myData.h>
 
 //
-void millis_to_hours(uint32_t ms, char* hr_str)
+#define REPORTING_PERIOD_MS 100
+// Sampling is tightly related to the dynamic range of the ADC.
+// refer to the datasheet for further info
+// #define SAMPLING_RATE                       MAX30102_SAMPRATE_100HZ
+
+// The LEDs currents must be set to a level that avoids clipping and maximises the
+// dynamic range
+// #define IR_LED_CURRENT                      MAX30102_LED_CURR_50MA
+// #define RED_LED_CURRENT                     MAX30102_LED_CURR_27_1MA
+
+// The pulse width of the LEDs driving determines the resolution of
+// the ADC (which is a Sigma-Delta).
+// set HIGHRES_MODE to true only when setting PULSE_WIDTH to MAX30100_SPC_PW_1600US_16BITS
+// #define PULSE_WIDTH                         MAX30102_SPC_PW_118US_16BITS
+// #define HIGHRES_MODE                        true
+
+// PulseOximeter is the higher level interface to the sensor
+// it offers:
+//  * beat detection reporting
+//  * heart rate calculation
+//  * SpO2 (oxidation level) calculation
+
+#define DEBUG true // turn on serial output
+
+//
+PulseOximeter pox; // pulse oximeter class declaration
+//
+uint32_t tsLastReport = 0;
+
+// Callback (registered below) fired when a pulse is detected
+void onBeatDetected()
 {
-  char istr[6];
-  uint32_t secs,mins,hrs;
-  secs=ms/1000; // time in seconds
-  mins=secs/60; // time in minutes
-  secs-=60*mins; // leftover seconds
-  hrs=mins/60; // time in hours
-  mins-=60*hrs; // leftover minutes
-  itoa(hrs,hr_str,10);
-  strcat(hr_str,":");
-  itoa(mins,istr,10);
-  strcat(hr_str,istr);
-  strcat(hr_str,":");
-  itoa(secs,istr,10);
-  strcat(hr_str,istr);
+    myData.heart_rate = int(pox.getHeartRate());
+    myData.SpO2 = abs(pox.getSpO2());
+#if DEBUG
+    Serial.println("----");
+    Serial.println(myData.heart_rate);
+    Serial.println(myData.SpO2);
+    Serial.println("----");
+#endif
+    tsLastReport = millis();
 }
-//
+
 void setup()
 {
-  //Wire.begin(SDA_PIN, SCL_PIN);
-  pinMode(int_pin, INPUT);
+#if DEBUG
+    Serial.begin(115200);
+#endif
+    //
+    EEPROM_tools.init(); // initialize eeprom
+    //
+    myWifi.init(); // read credentials from eeprom
+    //
+    myWifi.connect_Wifi(true); // try to connect to wifi or open AP
 
-  Serial.begin(115200);
-  Serial.println("Initializing...");
+    // SDA and SCL two wire pin config (uncomment and change as needed, defaults are stored in myData.h)
+    // myData.sda_pin = 5;
+    // myData.scl_pin = 4;
 
-
-  // Initialize sensor
-  if (!maxim_max30102_init()) // I2C port defined in max30102.cpp init(), 400kHz speed
-  {
-    Serial.println("MAX30105 was not found. Please check wiring/power. ");
-    while (1);
-  }
-  uint8_t uch_dummy;
-  maxim_max30102_read_reg(REG_REV_ID, &uch_dummy);
-  Serial.print("Rev ID: "); // sensor revision, code is targeted at Rev 2+
-  Serial.println(uch_dummy);
-
-  old_n_spo2=0.0;
-  /*
-   while(Serial.available()==0)  //wait until user presses a key
-  {
-    Serial.println(F("Press any key to start conversion"));
-    delay(2000);
-  }
-  uch_dummy=Serial.read();
-  */
-  Serial.print(F("Time[s]\tSpO2\tHR\tClock\tTemp[C]"));
-
-
-
-  //startTime = millis();
-  timeStart=millis();
+    // Initialize the PulseOximeter instance
+    if (!pox.begin())
+    {
+#if DEBUG
+        // Failures are generally due to an improper I2C wiring, missing power supply or wrong target chip
+        Serial.println("FAILED");
+#endif
+        while (1)
+            ;
+    }
+    else
+    {
+#if DEBUG
+        Serial.println("SUCCESS");
+#endif
+    }
+    // Register a callback for the beat detection
+    pox.setOnBeatDetectedCallback(onBeatDetected);
 }
 
 void loop()
 {
-  float n_spo2,ratio,correl;  //SPO2 value
-  int8_t ch_spo2_valid;  //indicator to show if the SPO2 calculation is valid
-  int32_t n_heart_rate; //heart rate value
-  int8_t  ch_hr_valid;  //indicator to show if the heart rate calculation is valid
-  int32_t i;
-  char hr_str[10];
-     
-  //buffer length of BUFFER_SIZE stores ST seconds of samples running at FS sps
-  //read BUFFER_SIZE samples, and determine the signal range
-  for(i=0;i<BUFFER_SIZE;i++)
-  {
-    while(digitalRead(int_pin)==1);  //wait until the interrupt pin asserts
-    maxim_max30102_read_fifo((aun_red_buffer+i), (aun_ir_buffer+i));  //read from MAX30102 FIFO
-    delay(2); // need time for int pin to reset
-    // Serial.print("");
-    // Serial.print(i, DEC);
-    //  Serial.print(F("\t"));
-    //  Serial.print(aun_red_buffer[i], DEC);
-    //  Serial.print(F("\t"));
-    //  Serial.print(aun_ir_buffer[i], DEC);
-    //  Serial.println("");
-  }
+    pox.update(); // call to max30102 sensor for data
+    myWifi.loop(); // respond to wifi requests
 
-  //calculate heart rate and SpO2 after BUFFER_SIZE samples (ST seconds of samples) using Robert's method
-  rf_heart_rate_and_oxygen_saturation(aun_ir_buffer, BUFFER_SIZE, aun_red_buffer, &n_spo2, &ch_spo2_valid, &n_heart_rate, &ch_hr_valid, &ratio, &correl); 
-  elapsedTime=millis()-timeStart;
-  millis_to_hours(elapsedTime,hr_str); // Time in hh:mm:ss format
-  elapsedTime/=1000; // Time in seconds
-
-  // Read the _chip_ temperature in degrees Celsius
-  int8_t integer_temperature;
-  uint8_t fractional_temperature;
-  maxim_max30102_read_temperature(&integer_temperature, &fractional_temperature);
-  float temperature_C = integer_temperature + (((float)fractional_temperature)/16.0);
-  float temperature_F = (temperature_C * 1.8) + 32; // convert to F
-  //
-
-  Serial.println("------");
-  Serial.print(elapsedTime);
-  Serial.print("\t");
-  Serial.print(n_spo2);
-  Serial.print("\t");
-  Serial.print(n_heart_rate, DEC);
-  Serial.print(" BPM\t");
-  Serial.print(hr_str);
-  Serial.print("\t");
-  Serial.print(temperature_F);
-  Serial.println(" F");
-  Serial.println("------");
+    if (millis() - tsLastReport > REPORTING_PERIOD_MS)
+    {
+        // due stuff here if needed
+    }    
 }
-
-
-
-
